@@ -1,0 +1,77 @@
+# Import necessary libraries
+import re
+import jwt
+import datetime
+import psycopg2
+
+# Connect to PostgreSQL database
+conn = psycopg2.connect(database="your_database", user="your_username", password="your_password", host="your_host", port="your_port")
+cur = conn.cursor()
+
+# User Registration by email
+def register_user(email, password):
+    # Validate email format
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        return "Invalid email format"
+    
+    # Check if email already exists in the database
+    cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+    if cur.fetchone():
+        return "Email already exists"
+    
+    # Insert new user into the database
+    cur.execute("INSERT INTO users (email, password) VALUES (%s, %s)", (email, password))
+    conn.commit()
+    
+    return "User registered successfully"
+
+# Login via email and password
+def login_user(email, password):
+    # Check if email exists in the database
+    cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+    user = cur.fetchone()
+    if not user:
+        return "Email does not exist"
+    
+    # Check if password matches
+    if user[2] != password:
+        return "Incorrect password"
+    
+    # Generate JWT token
+    token = jwt.encode({'email': email, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)}, 'your_secret_key')
+    
+    return token
+
+# Creating a new blog post
+def create_blog_post(title, content, token):
+    try:
+        # Verify JWT token
+        decoded_token = jwt.decode(token, 'your_secret_key')
+        email = decoded_token['email']
+        
+        # Insert new blog post into the database
+        cur.execute("INSERT INTO blog_posts (title, content, author) VALUES (%s, %s, %s)", (title, content, email))
+        conn.commit()
+        
+        return "Blog post created successfully"
+    except jwt.ExpiredSignatureError:
+        return "Token has expired"
+    except jwt.InvalidTokenError:
+        return "Invalid token"
+
+# Post Comments
+def post_comment(post_id, comment, token):
+    try:
+        # Verify JWT token
+        decoded_token = jwt.decode(token, 'your_secret_key')
+        email = decoded_token['email']
+        
+        # Insert new comment into the database
+        cur.execute("INSERT INTO comments (post_id, comment, author) VALUES (%s, %s, %s)", (post_id, comment, email))
+        conn.commit()
+        
+        return "Comment posted successfully"
+    except jwt.ExpiredSignatureError:
+        return "Token has expired"
+    except jwt.InvalidTokenError:
+        return "Invalid token"
