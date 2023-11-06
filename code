@@ -1,77 +1,113 @@
-# Import necessary libraries
-import re
-import jwt
-import datetime
-import psycopg2
+#import libraries
+!pip install Flask
+!pip install Flask-JWT-Extended
+!pip install SQLAlchemy
+!pip install psycopg2-binary
 
-# Connect to PostgreSQL database
-conn = psycopg2.connect(database="your_database", user="your_username", password="your_password", host="your_host", port="your_port")
-cur = conn.cursor()
+#code
+from flask import Flask, request, jsonify
+from flask_jwt_extended import JWTManager, create_access_token
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.exc import IntegrityError
 
-# User Registration by email
-def register_user(email, password):
+app = Flask(__name__)
+app.config['JWT_SECRET_KEY'] = 'jwtsecuritykey' 
+jwt = JWTManager(app)
+
+# Setup SQLAlchemy
+db_string = 'postgresql://username:password@localhost/db'  
+db = create_engine(db_string)
+base = declarative_base()
+
+# Define your models
+class User(base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    email = Column(String, unique=True, nullable=False)
+    password = Column(String, nullable=False)
+
+class Post(base):
+    __tablename__ = 'posts'
+    id = Column(Integer, primary_key=True)
+    title = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    user = relationship("User", backref="posts")
+
+class Comment(base):
+    __tablename__ = 'comments'
+    id = Column(Integer, primary_key=True)
+    content = Column(Text, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    post_id = Column(Integer, ForeignKey('posts.id'))
+    user = relationship("User", backref="comments")
+    post = relationship("Post", backref="comments")
+
+base.metadata.create_all(db)
+Session = sessionmaker(db)
+session = Session()
+
+# Implement your APIs
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({'message': 'Email and password are required'}), 400
+
     # Validate email format
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-        return "Invalid email format"
-    
-    # Check if email already exists in the database
-    cur.execute("SELECT * FROM users WHERE email = %s", (email,))
-    if cur.fetchone():
-        return "Email already exists"
-    
-    # Insert new user into the database
-    cur.execute("INSERT INTO users (email, password) VALUES (%s, %s)", (email, password))
-    conn.commit()
-    
-    return "User registered successfully"
+    if '@' not in email or '.' not in email:
+        return jsonify({'message': 'Invalid email format'}), 400
 
-# Login via email and password
-def login_user(email, password):
-    # Check if email exists in the database
-    cur.execute("SELECT * FROM users WHERE email = %s", (email,))
-    user = cur.fetchone()
-    if not user:
-        return "Email does not exist"
-    
-    # Check if password matches
-    if user[2] != password:
-        return "Incorrect password"
-    
-    # Generate JWT token
-    token = jwt.encode({'email': email, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)}, 'your_secret_key')
-    
-    return token
-
-# Creating a new blog post
-def create_blog_post(title, content, token):
     try:
-        # Verify JWT token
-        decoded_token = jwt.decode(token, 'your_secret_key')
-        email = decoded_token['email']
-        
-        # Insert new blog post into the database
-        cur.execute("INSERT INTO blog_posts (title, content, author) VALUES (%s, %s, %s)", (title, content, email))
-        conn.commit()
-        
-        return "Blog post created successfully"
-    except jwt.ExpiredSignatureError:
-        return "Token has expired"
-    except jwt.InvalidTokenError:
-        return "Invalid token"
+        new_user = User(email=email, password=password)
+        session.add(new_user)
+        session.commit()
+        return jsonify({'message': 'User registered successfully'}), 201
+    except IntegrityError:
+        session.rollback()
+        return jsonify({'message': 'Email already registered'}), 400
 
-# Post Comments
-def post_comment(post_id, comment, token):
-    try:
-        # Verify JWT token
-        decoded_token = jwt.decode(token, 'your_secret_key')
-        email = decoded_token['email']
-        
-        # Insert new comment into the database
-        cur.execute("INSERT INTO comments (post_id, comment, author) VALUES (%s, %s, %s)", (post_id, comment, email))
-        conn.commit()
-        
-        return "Comment posted successfully"
-    except jwt.ExpiredSignatureError:
-        return "Token has expired"
-    except jwt.InvalidTokenError:
-        return "Invalid token"
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    user = session.query(User).filter_by(email=email).first()
+    if user and user.password == password:
+        access_token = create_access_token(identity=email)
+        return jsonify(access_token=access_token), 200
+    return jsonify({'message': 'Invalid credentials'}), 401
+
+@app.route('/create_post', methods=['POST'])
+def create_post():
+    data = request.get_json()
+    title = data.get('title')
+    content = data.get('content')
+    user_id = data.get('user_id')
+
+    new_post = Post(title=title, content=content, user_id=user_id)
+    session.add(new_post)
+    session.commit()
+    return jsonify({'message': 'Post created successfully'}), 201
+
+@app.route('/post_comment', methods=['POST'])
+def post_comment():
+    data = request.get_json()
+    content = data.get('content')
+    user_id = data.get('user_id')
+    post_id = data.get('post_id')
+
+    new_comment = Comment(content=content, user_id=user_id, post_id=post_id)
+    session.add(new_comment)
+    session.commit()
+    return jsonify({'message': 'Comment posted successfully'}), 201
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
